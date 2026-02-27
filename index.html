@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>在线白板</title>
+  <style>
+    :root {
+      --bg: #f6f8fb;
+      --card: #ffffff;
+      --text: #1f2937;
+      --sub: #6b7280;
+      --primary: #2563eb;
+      --danger: #dc2626;
+      --ok: #16a34a;
+      --border: #cbd5e1;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+    }
+    .app {
+      width: 100%;
+      min-height: 100vh;
+      background: var(--card);
+      border: 0;
+      border-radius: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+    }
+    .title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+    .desc {
+      color: var(--sub);
+      font-size: 13px;
+      margin-bottom: 12px;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #f9fafb;
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    button:hover { filter: brightness(1.1); }
+    #pasteBtn {
+      background: #60a5fa;
+      border-color: transparent;
+      color: #fff;
+    }
+    .primary { background: var(--primary); border-color: transparent; }
+    .danger { background: var(--danger); border-color: transparent; }
+    .ok { background: var(--ok); border-color: transparent; }
+    .primary, .danger, .ok { color: #fff; }
+
+    textarea {
+      width: 100%;
+      min-height: 0;
+      height: calc(100vh - 220px);
+      resize: vertical;
+      border-radius: 12px;
+      border: 2px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      padding: 14px;
+      line-height: 1.6;
+      font-size: 15px;
+      outline: none;
+    }
+    .status {
+      margin-top: 10px;
+      display: flex;
+      justify-content: space-between;
+      color: var(--sub);
+      font-size: 12px;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .tip {
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--sub);
+    }
+    kbd {
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+      border-bottom-width: 2px;
+      border-radius: 6px;
+      padding: 0 6px;
+      font-size: 12px;
+    }
+
+    @media (max-width: 768px) {
+      .app { padding: 12px; }
+      .title { font-size: 18px; }
+      .desc, .tip, .status { font-size: 12px; }
+      .toolbar { gap: 6px; }
+      button {
+        flex: 1 1 calc(50% - 6px);
+        min-height: 40px;
+        padding: 8px;
+      }
+      textarea {
+        height: calc(100vh - 250px);
+        font-size: 16px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      button {
+        flex-basis: 100%;
+      }
+      .status {
+        flex-direction: column;
+        gap: 4px;
+      }
+      textarea {
+        height: calc(100vh - 300px);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <div class="title">📝 在线白板 </div>
+    <div class="desc">用于临时保存文本、代码、链接。内容自动保存在本机浏览器，不上传服务器。</div>
+
+    <div class="toolbar">
+      <button id="pasteBtn">从剪贴板粘贴</button>
+      <button id="copyBtn" class="primary">复制全部</button>
+      <button id="downloadBtn" class="ok">导出 TXT</button>
+      <button id="clearBtn" class="danger">清空</button>
+    </div>
+
+    <textarea id="board" placeholder="把内容粘贴到这里…"></textarea>
+
+    <div class="status">
+      <span id="stat">字数: 0 ｜ 行数: 1</span>
+      <span id="saveState">状态：未修改</span>
+    </div>
+
+    <div class="tip">
+      快捷键：<kbd>Ctrl/Cmd + S</kbd> 手动保存（其实会自动保存）｜
+      <kbd>Ctrl/Cmd + A</kbd> 全选｜
+      <kbd>Ctrl/Cmd + C</kbd> 复制
+    </div>
+  </main>
+
+  <script>
+    const board = document.getElementById('board');
+    const stat = document.getElementById('stat');
+    const saveState = document.getElementById('saveState');
+
+    const pasteBtn = document.getElementById('pasteBtn');
+    const copyBtn = document.getElementById('copyBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const downloadBtn = document.getElementById('downloadBtn');
+
+    const STORAGE_KEY = 'temp_whiteboard_content_v1';
+    const TIME_KEY = 'temp_whiteboard_saved_at_v1';
+
+    // 初始化读取本地缓存
+    const cached = localStorage.getItem(STORAGE_KEY);
+    if (cached) board.value = cached;
+    updateStat();
+
+    function nowText() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    }
+
+    let saveTimer = null;
+    function scheduleSave() {
+      saveState.textContent = '状态：编辑中...';
+      if (saveTimer) clearTimeout(saveTimer);
+      saveTimer = setTimeout(() => {
+        localStorage.setItem(STORAGE_KEY, board.value);
+        localStorage.setItem(TIME_KEY, nowText());
+        saveState.textContent = `状态：已保存（${localStorage.getItem(TIME_KEY)}）`;
+      }, 300);
+    }
+
+    function updateStat() {
+      const text = board.value || '';
+      const chars = text.length;
+      const lines = text.length ? text.split('\n').length : 1;
+      stat.textContent = `字数: ${chars} ｜ 行数: ${lines}`;
+    }
+
+    function syncStatAndSave() {
+      updateStat();
+      scheduleSave();
+    }
+
+    // 不同输入法 / 浏览器下都能稳定更新字数
+    ['input', 'change', 'keyup', 'paste', 'cut', 'drop', 'compositionend'].forEach((evt) => {
+      board.addEventListener(evt, syncStatAndSave);
+    });
+
+    // 粘贴按钮
+    pasteBtn.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text) return alert('剪贴板为空');
+        // 光标位置插入
+        const start = board.selectionStart ?? board.value.length;
+        const end = board.selectionEnd ?? board.value.length;
+        board.value = board.value.slice(0, start) + text + board.value.slice(end);
+        board.selectionStart = board.selectionEnd = start + text.length;
+        board.focus();
+        updateStat();
+        scheduleSave();
+      } catch (e) {
+        alert('读取剪贴板失败，请手动 Ctrl/Cmd+V 粘贴。\n（浏览器需 HTTPS 或 localhost）');
+      }
+    });
+
+    // 复制按钮
+    copyBtn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(board.value);
+        copyBtn.textContent = '已复制 ✅';
+        setTimeout(() => (copyBtn.textContent = '复制全部'), 1200);
+      } catch (e) {
+        // 兼容老方式
+        board.select();
+        document.execCommand('copy');
+        copyBtn.textContent = '已复制 ✅';
+        setTimeout(() => (copyBtn.textContent = '复制全部'), 1200);
+      }
+    });
+
+    // 清空按钮
+    clearBtn.addEventListener('click', () => {
+      if (!confirm('确定清空白板内容吗？')) return;
+      board.value = '';
+      updateStat();
+      localStorage.removeItem(STORAGE_KEY);
+      localStorage.removeItem(TIME_KEY);
+      saveState.textContent = '状态：已清空';
+      board.focus();
+    });
+
+    // 导出 TXT
+    downloadBtn.addEventListener('click', () => {
+      const blob = new Blob([board.value], { type: 'text/plain;charset=utf-8' });
+      const a = document.createElement('a');
+      const ts = nowText().replace(/[: ]/g, '-');
+      a.href = URL.createObjectURL(blob);
+      a.download = `whiteboard-${ts}.txt`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+
+    // Ctrl/Cmd + S
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        localStorage.setItem(STORAGE_KEY, board.value);
+        localStorage.setItem(TIME_KEY, nowText());
+        saveState.textContent = `状态：已手动保存（${localStorage.getItem(TIME_KEY)}）`;
+      }
+    });
+
+    // 初始状态
+    const t = localStorage.getItem(TIME_KEY);
+    saveState.textContent = t ? `状态：已加载（上次保存 ${t}）` : '状态：未修改';
+  </script>
+</body>
+</html>
